@@ -14,17 +14,21 @@ function freqToMidi(f) {
 export async function analyzeAudioFile(file) {
   const arrayBuffer = await file.arrayBuffer();
   const copy = arrayBuffer.slice(0);
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioCtx();
   let audioBuffer;
   try {
     audioBuffer = await new Promise((resolve, reject) => {
       audioCtx.decodeAudioData(copy, resolve, reject);
     });
+    audioCtx.close();
   } catch (decodeErr) {
     audioCtx.close();
-    return { error: `Cannot decode this audio format (${file.type || file.name.split('.').pop()}). Browser said: ${decodeErr?.message || decodeErr}. Try converting to WAV or MP3.` };
+    audioBuffer = await decodeViaMediaElement(file);
+    if (!audioBuffer) {
+      return { error: `Cannot decode this audio format (${file.type || file.name.split('.').pop()}). Try converting to WAV or MP3 first.` };
+    }
   }
-  audioCtx.close();
 
   const sampleRate = audioBuffer.sampleRate;
   const raw = audioBuffer.getChannelData(0);
@@ -134,6 +138,67 @@ export function computeInKeyPct(notes, pitchClasses) {
   if (!notes.length || !pitchClasses) return 0;
   const inKey = notes.filter(n => pitchClasses.has(n.midi % 12)).length;
   return Math.round(inKey / notes.length * 100);
+}
+
+async function decodeViaMediaElement(file) {
+  const url = URL.createObjectURL(file);
+  const audio = new Audio();
+  audio.src = url;
+  audio.muted = true;
+  audio.preload = 'auto';
+
+  try {
+    await new Promise((resolve, reject) => {
+      audio.onloadedmetadata = resolve;
+      audio.onerror = () => reject(new Error('Cannot load audio'));
+      setTimeout(() => reject(new Error('Load timeout')), 15000);
+    });
+
+    const duration = audio.duration;
+    if (!duration || !isFinite(duration)) return null;
+
+    const sampleRate = 44100;
+    const totalSamples = Math.ceil(duration * sampleRate);
+    const offCtx = new OfflineAudioContext(1, totalSamples, sampleRate);
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+
+    const dest = ctx.createMediaStreamDestination();
+    const source = ctx.createMediaElementSource(audio);
+    source.connect(dest);
+
+    const chunks = [];
+    const recorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+
+    const recordDone = new Promise(resolve => { recorder.onstop = resolve; });
+    recorder.start();
+    audio.muted = false;
+    audio.playbackRate = 1;
+    await audio.play();
+    await new Promise(resolve => { audio.onended = resolve; });
+    recorder.stop();
+    await recordDone;
+    ctx.close();
+
+    const blob = new Blob(chunks, { type: 'audio/webm' });
+    const buf = await blob.arrayBuffer();
+    const decCtx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const decoded = await new Promise((resolve, reject) => {
+        decCtx.decodeAudioData(buf, resolve, reject);
+      });
+      decCtx.close();
+      return decoded;
+    } catch {
+      decCtx.close();
+      return null;
+    }
+  } catch {
+    return null;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function detectOnsets(samples, sr) {
