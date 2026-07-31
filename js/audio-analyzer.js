@@ -144,56 +144,64 @@ async function decodeViaMediaElement(file) {
   const url = URL.createObjectURL(file);
   const audio = new Audio();
   audio.src = url;
-  audio.muted = true;
+  audio.crossOrigin = 'anonymous';
   audio.preload = 'auto';
 
   try {
     await new Promise((resolve, reject) => {
-      audio.onloadedmetadata = resolve;
-      audio.onerror = () => reject(new Error('Cannot load audio'));
+      audio.oncanplaythrough = resolve;
+      audio.onerror = () => reject(new Error('Browser cannot play this format'));
       setTimeout(() => reject(new Error('Load timeout')), 15000);
     });
 
     const duration = audio.duration;
     if (!duration || !isFinite(duration)) return null;
 
-    const sampleRate = 44100;
-    const totalSamples = Math.ceil(duration * sampleRate);
-    const offCtx = new OfflineAudioContext(1, totalSamples, sampleRate);
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioCtx();
     await ctx.resume();
+    const sampleRate = ctx.sampleRate;
 
-    const dest = ctx.createMediaStreamDestination();
     const source = ctx.createMediaElementSource(audio);
-    source.connect(dest);
+    const bufferSize = 4096;
+    const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const allSamples = [];
 
-    const chunks = [];
-    const recorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
-    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    source.connect(processor);
+    processor.connect(gain);
+    gain.connect(ctx.destination);
 
-    const recordDone = new Promise(resolve => { recorder.onstop = resolve; });
-    recorder.start();
-    audio.muted = false;
-    audio.playbackRate = 1;
+    processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      allSamples.push(new Float32Array(input));
+    };
+
     await audio.play();
-    await new Promise(resolve => { audio.onended = resolve; });
-    recorder.stop();
-    await recordDone;
+    await new Promise((resolve) => {
+      audio.onended = resolve;
+      setTimeout(resolve, (duration + 2) * 1000);
+    });
+
+    processor.disconnect();
+    source.disconnect();
+    gain.disconnect();
     ctx.close();
 
-    const blob = new Blob(chunks, { type: 'audio/webm' });
-    const buf = await blob.arrayBuffer();
-    const decCtx = new (window.AudioContext || window.webkitAudioContext)();
-    try {
-      const decoded = await new Promise((resolve, reject) => {
-        decCtx.decodeAudioData(buf, resolve, reject);
-      });
-      decCtx.close();
-      return decoded;
-    } catch {
-      decCtx.close();
-      return null;
+    const totalLength = allSamples.reduce((s, a) => s + a.length, 0);
+    if (totalLength < sampleRate) return null;
+
+    const offCtx = new OfflineAudioContext(1, totalLength, sampleRate);
+    const audioBuffer = offCtx.createBuffer(1, totalLength, sampleRate);
+    const channel = audioBuffer.getChannelData(0);
+    let offset = 0;
+    for (const chunk of allSamples) {
+      channel.set(chunk, offset);
+      offset += chunk.length;
     }
+
+    return audioBuffer;
   } catch {
     return null;
   } finally {
