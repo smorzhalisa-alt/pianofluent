@@ -13,8 +13,13 @@ function freqToMidi(f) {
 
 export async function analyzeAudioFile(file) {
   const arrayBuffer = await file.arrayBuffer();
-  const audioCtx = new OfflineAudioContext(1, 1, 44100);
-  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    audioCtx.close();
+  }
 
   const sampleRate = audioBuffer.sampleRate;
   const raw = audioBuffer.getChannelData(0);
