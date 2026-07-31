@@ -13,13 +13,18 @@ function freqToMidi(f) {
 
 export async function analyzeAudioFile(file) {
   const arrayBuffer = await file.arrayBuffer();
+  const copy = arrayBuffer.slice(0);
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   let audioBuffer;
   try {
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-  } finally {
+    audioBuffer = await new Promise((resolve, reject) => {
+      audioCtx.decodeAudioData(copy, resolve, reject);
+    });
+  } catch (decodeErr) {
     audioCtx.close();
+    return { error: `Cannot decode this audio format (${file.type || file.name.split('.').pop()}). Browser said: ${decodeErr?.message || decodeErr}. Try converting to WAV or MP3.` };
   }
+  audioCtx.close();
 
   const sampleRate = audioBuffer.sampleRate;
   const raw = audioBuffer.getChannelData(0);
