@@ -2,6 +2,8 @@ import { storage } from './storage.js';
 import { MidiHub, isSupported, browserHint, noteName } from './midi.js';
 import { guessDevice, KNOWN_DEVICES } from './devices.js';
 import { SessionRecorder } from './session.js';
+import { analyzeAudioFile, computeInKeyPct } from './audio-analyzer.js';
+import { getPassage, computeScore } from './competitions.js';
 import * as ui from './ui.js';
 
 const midi = new MidiHub();
@@ -17,6 +19,7 @@ const app = {
   midiInputs: [],
   testNote: null,
   freshSummaryId: null,
+  uploadState: { processing: false, error: null, passageId: null },
 };
 
 /* ---------- initial boot ---------- */
@@ -69,8 +72,7 @@ function renderCurrent(){
   const state = storage.getState();
   const { path, param } = currentRoute();
 
-  // Bounce first-time users to welcome unless they explicitly navigate
-  if(!state.onboarded && path !== 'welcome' && path !== 'connect'){
+  if(!state.onboarded && path !== 'welcome' && path !== 'connect' && path !== 'upload'){
     location.hash = '#/welcome';
     return;
   }
@@ -98,6 +100,12 @@ function renderCurrent(){
       break;
     case 'summary':
       renderSummary(param, param === app.freshSummaryId);
+      break;
+    case 'upload':
+      renderUpload(param);
+      break;
+    case 'level':
+      renderLevel(param);
       break;
     default:
       renderView(`<section class="glass panel"><h2>Not found</h2><p class="lede">Nothing at <code>${ui.escapeHtml(location.hash)}</code>.</p><button class="btn" data-action="go-home">Home</button></section>`);
@@ -150,11 +158,100 @@ function renderHome(){
   }));
 }
 
+/* ---------- upload view ---------- */
+
+function renderUpload(passageId){
+  if (passageId) app.uploadState.passageId = passageId;
+  renderView(ui.viewUpload(app.uploadState));
+  wireUploadZone();
+}
+
+function wireUploadZone(){
+  const zone = document.getElementById('uploadZone');
+  const fileInput = document.getElementById('audioFile');
+  const passageSelect = document.getElementById('passageSelect');
+  if(!zone || !fileInput) return;
+
+  zone.addEventListener('click', () => fileInput.click());
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    if(e.dataTransfer.files.length) handleAudioFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => {
+    if(fileInput.files.length) handleAudioFile(fileInput.files[0]);
+  });
+
+  if(passageSelect){
+    passageSelect.addEventListener('change', () => {
+      app.uploadState.passageId = passageSelect.value || null;
+    });
+  }
+}
+
+async function handleAudioFile(file){
+  app.uploadState.processing = true;
+  app.uploadState.error = null;
+  renderUpload();
+
+  try {
+    const result = await analyzeAudioFile(file);
+
+    if(result.error){
+      app.uploadState.processing = false;
+      app.uploadState.error = result.error;
+      renderUpload();
+      return;
+    }
+
+    const passageId = app.uploadState.passageId;
+    const passage = passageId ? getPassage(passageId) : null;
+
+    if(passage && result.notes){
+      const inKeyPct = computeInKeyPct(result.notes, passage.keyPitchClasses);
+      result.inKeyPct = inKeyPct;
+      result.competitionPassageId = passageId;
+
+      const scoreResult = computeScore({
+        npm: result.npm,
+        inKeyPct,
+        cv: result.cv,
+      });
+      result.competitionScore = scoreResult.total;
+      result.scoreBreakdown = scoreResult;
+    } else if(result.notes) {
+      const allPitchClasses = new Set([0,1,2,3,4,5,6,7,8,9,10,11]);
+      result.inKeyPct = 100;
+    }
+
+    storage.saveSession(result);
+    storage.setState({ onboarded: true });
+    app.freshSummaryId = result.id;
+    app.uploadState = { processing: false, error: null, passageId: null };
+    goto(`#/summary/${result.id}`);
+  } catch(err) {
+    console.error('Audio analysis failed', err);
+    app.uploadState.processing = false;
+    app.uploadState.error = `Analysis failed: ${err.message || 'Unknown error'}. Try a different recording.`;
+    renderUpload();
+  }
+}
+
+/* ---------- level view ---------- */
+
+function renderLevel(levelId){
+  renderView(ui.viewLevel({
+    levelId,
+    sessions: storage.getSessions(),
+  }));
+}
+
 /* ---------- session live view ---------- */
 
 function renderSessionLive(){
   if(!recorder.active){
-    // Nothing to render — bounce home
     location.hash = '#/home';
     return;
   }
@@ -174,7 +271,7 @@ function renderSummary(id, isFresh){
     return;
   }
   renderView(ui.viewSessionSummary({ session, isFresh }));
-  if(isFresh) app.freshSummaryId = null; // consume the "fresh" flag
+  if(isFresh) app.freshSummaryId = null;
 }
 
 /* ---------- MIDI connection events ---------- */
@@ -192,7 +289,6 @@ function onDeviceDisconnected(){
   app.testNote = null;
   refreshConnStatus();
   if(recorder.active){
-    // Surface the disconnect but keep the session running so brief drops don't lose data
     flashAlert('Piano disconnected. Reconnect to keep capturing notes.');
   }
   renderCurrent();
@@ -228,7 +324,6 @@ function endSession({ discard = false } = {}){
   cleanupRecorderListeners();
 
   if(!summary || summary.totalNotes === 0 || discard){
-    // Empty or discarded — don't save.
     renderView(ui.viewEmptySessionDiscard());
     return;
   }
@@ -261,6 +356,9 @@ function wireGlobalClicks(){
         storage.setState({ onboarded: true });
         goto('#/connect');
         break;
+      case 'go-connect':
+        goto('#/connect');
+        break;
       case 'skip-to-home':
         storage.setState({ onboarded: true });
         goto('#/home');
@@ -284,6 +382,18 @@ function wireGlobalClicks(){
         break;
       case 'go-home':
         goto('#/home');
+        break;
+      case 'open-upload':
+        storage.setState({ onboarded: true });
+        app.uploadState = { processing: false, error: null, passageId: null };
+        goto('#/upload');
+        break;
+      case 'compete-upload':
+        app.uploadState = { processing: false, error: null, passageId: id };
+        goto(`#/upload/${id}`);
+        break;
+      case 'open-level':
+        goto(`#/level/${id}`);
         break;
       case 'start-session':
         startSession();
@@ -327,7 +437,7 @@ async function rescan(){
   renderConnect();
 }
 
-/* ---------- transient alert (no persistent state) ---------- */
+/* ---------- transient alert ---------- */
 
 function flashAlert(msg){
   const bar = document.createElement('div');

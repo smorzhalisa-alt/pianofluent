@@ -1,5 +1,6 @@
 import { noteName, isBlackKey } from './midi.js';
-import { formatDuration, formatDurationHuman, computeStreak, personalRecords, weeklyTotals } from './session.js';
+import { formatDuration, formatDurationHuman, computeStreak, personalRecords, weeklyTotals, dayKey } from './session.js';
+import { LEVELS, speedLabel, rhythmLabel, touchLabel, coachNotes, computeScore } from './competitions.js';
 
 /* ---------- helpers ---------- */
 
@@ -23,6 +24,119 @@ function relativeTime(iso){
   return new Date(t).toLocaleDateString(undefined, { month:'short', day:'numeric' });
 }
 
+/* ---------- Commitment grid ---------- */
+
+function commitmentGrid(sessions) {
+  const weeks = 20;
+  const totalDays = weeks * 7;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const dayCounts = {};
+  for (const s of sessions) {
+    const dk = dayKey(new Date(s.startedAt));
+    dayCounts[dk] = (dayCounts[dk] || 0) + 1;
+  }
+
+  const maxCount = Math.max(1, ...Object.values(dayCounts));
+  const cells = [];
+
+  const dayOfWeek = today.getDay();
+  const gridStart = new Date(today);
+  gridStart.setDate(gridStart.getDate() - (totalDays - 1) - dayOfWeek);
+
+  for (let col = 0; col < weeks; col++) {
+    for (let row = 0; row < 7; row++) {
+      const d = new Date(gridStart);
+      d.setDate(d.getDate() + col * 7 + row);
+      const dk = dayKey(d);
+      const count = dayCounts[dk] || 0;
+      const future = d > today;
+
+      let level = 0;
+      if (count > 0) {
+        const ratio = count / maxCount;
+        if (ratio <= 0.25) level = 1;
+        else if (ratio <= 0.5) level = 2;
+        else if (ratio <= 0.75) level = 3;
+        else level = 4;
+      }
+
+      const title = future ? '' : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}: ${count} session${count === 1 ? '' : 's'}`;
+      cells.push(`<div class="commit-cell ${future ? 'future' : ''} level-${level}" data-day="${dk}" title="${title}" ${count > 0 ? `data-action="open-day" data-id="${dk}"` : ''}></div>`);
+    }
+  }
+
+  return `<div class="commit-grid" style="display:grid; grid-template-rows:repeat(7,1fr); grid-auto-flow:column; gap:3px;">${cells.join('')}</div>`;
+}
+
+/* ---------- Last session stats widget ---------- */
+
+function lastSessionWidget(sessions) {
+  sessions = sessions.filter(s => !s.testSkip);
+  if (!sessions.length) {
+    return `
+      <div class="last-session-empty">
+        <h4>No sessions yet</h4>
+        <p>Record your first practice to see stats here.</p>
+        <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap">
+          <button class="btn pink" data-action="start-session">Connect piano</button>
+          <button class="btn" data-action="open-upload">Commit with audio</button>
+        </div>
+      </div>`;
+  }
+
+  const s = sessions[0];
+  const sl = s.npm ? speedLabel(s.npm || s.notesPerMinute || 0) : '—';
+  const npm = s.npm || s.notesPerMinute || 0;
+  const rl = s.cv != null ? rhythmLabel(s.cv) : '—';
+  const tl = s.dbStd != null ? touchLabel(s.dbStd) : '—';
+  const acc = s.ascending?.inKeyPct || s.inKeyPct || 0;
+
+  let rhythmSub = 'No data';
+  if (s.cv != null) {
+    if (s.cv >= 0.60) rhythmSub = 'Speeds up and slows down';
+    else if (s.cv >= 0.40) rhythmSub = 'A few rushed spots';
+    else rhythmSub = 'Nice and steady';
+  }
+
+  let touchSub = 'No data';
+  if (s.dbStd != null) {
+    if (s.dbStd >= 8) touchSub = 'Bass notes quieter';
+    else if (s.dbStd >= 5) touchSub = 'Some loud/soft spots';
+    else touchSub = 'Even touch throughout';
+  }
+
+  const dateStr = relativeTime(s.startedAt || s.endedAt || new Date().toISOString());
+
+  return `
+    <div class="last-session-header">
+      <span style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em; font-weight:800">Last session · ${dateStr}</span>
+    </div>
+    <div class="last-session-stats">
+      <div class="ls-stat">
+        <div class="ls-label">Speed</div>
+        <div class="ls-value">${sl}</div>
+        <div class="ls-sub">~${npm}/min</div>
+      </div>
+      <div class="ls-stat">
+        <div class="ls-label">Rhythm</div>
+        <div class="ls-value">${rl}</div>
+        <div class="ls-sub">${rhythmSub}</div>
+      </div>
+      <div class="ls-stat">
+        <div class="ls-label">Touch</div>
+        <div class="ls-value">${tl}</div>
+        <div class="ls-sub">${touchSub}</div>
+      </div>
+      <div class="ls-stat">
+        <div class="ls-label">Accuracy</div>
+        <div class="ls-value">${acc}%</div>
+        <div class="ls-sub">in key</div>
+      </div>
+    </div>`;
+}
+
 /* ---------- views ---------- */
 
 export function viewWelcome({ browser }){
@@ -34,11 +148,12 @@ export function viewWelcome({ browser }){
   return `
     ${warn}
     <section class="glass hero">
-      <span class="pill">MIDI-connected practice tracker</span>
+      <span class="pill">Piano practice tracker</span>
       <h2 style="margin-top:16px">Every practice session, measured.</h2>
-      <p class="lede">Plug in your digital piano over Bluetooth or USB and PianoFluent turns your playing into stats — notes, range, dynamics, streaks. Like Strava, but for the keys.</p>
+      <p class="lede">Connect your piano over MIDI or upload a recording — PianoFluent turns your playing into stats, streaks, and competition scores. Like Strava, but for the keys.</p>
       <div class="cta-row">
-        <button class="btn big pink" data-action="start-connect" ${browser.ok ? '' : 'disabled'}>Connect my piano</button>
+        <button class="btn big pink" data-action="start-connect" ${browser.ok ? '' : ''}>Connect my piano</button>
+        <button class="btn big" data-action="open-upload">Upload audio</button>
         <button class="btn-secondary" data-action="skip-to-home">Skip for now</button>
       </div>
     </section>
@@ -46,18 +161,18 @@ export function viewWelcome({ browser }){
     <div class="features">
       <div class="feature">
         <div class="icon">1</div>
-        <h4>Pair once</h4>
-        <p>Bluetooth MIDI or USB — the browser talks to your piano directly. No app install.</p>
+        <h4>Record</h4>
+        <p>MIDI keyboard live or upload an audio file — both work. No app install needed.</p>
       </div>
       <div class="feature">
         <div class="icon">2</div>
-        <h4>Play</h4>
-        <p>Hit Start and practice. Every note is captured live: which key, how hard, when.</p>
+        <h4>Get your report</h4>
+        <p>Speed, accuracy, touch, rhythm — all analyzed automatically with coaching tips.</p>
       </div>
       <div class="feature">
         <div class="icon">3</div>
-        <h4>See yourself grow</h4>
-        <p>Notes per minute, range, dynamics, streaks, personal records — all after each session.</p>
+        <h4>Compete & grow</h4>
+        <p>Enter competitions on standard passages. Track your improvement over time.</p>
       </div>
     </div>
   `;
@@ -137,7 +252,6 @@ export function viewConnect({ browser, inputs, currentDeviceName, savedDevices, 
   `;
 }
 
-// Shim so the template can reference currentDeviceId without a global
 let _currentDeviceId = null;
 export function _setCurrentDeviceIdShim(id){ _currentDeviceId = id; }
 function currentDeviceIdShim(){ return _currentDeviceId; }
@@ -165,89 +279,322 @@ function modelOptions(activeKey){
   ).join('');
 }
 
-/* ---------- Home dashboard ---------- */
+/* ---------- Home dashboard (wireframe layout) ---------- */
 
 export function viewHome({ sessions, currentDeviceName, connected }){
   const streak = computeStreak(sessions);
-  const records = personalRecords(sessions);
-  const week = weeklyTotals(sessions);
 
-  const connBlock = connected
-    ? `<div class="alert info"><h4>Connected to ${escapeHtml(currentDeviceName)}</h4><p>You're ready to start a session.</p></div>`
-    : `<div class="alert warn"><h4>No piano connected</h4><p>Connect your piano to start recording a session. <a href="#/connect">Open device setup →</a></p></div>`;
+  return `
+    <section class="glass panel home-top">
+      <div class="home-top-left">
+        <h2 style="margin-bottom:0">Start practice</h2>
+      </div>
+      <div class="home-top-right">
+        <button class="btn" data-action="go-connect">Connect piano</button>
+        <button class="btn pink" data-action="open-upload">Commit with audio</button>
+      </div>
+    </section>
 
-  const insights = `
-    <div class="insight-grid">
-      <div class="insight-card warm">
-        <div class="label">Current streak</div>
-        <div class="value">${streak.current}<span style="font-size:16px; margin-left:4px">day${streak.current===1?'':'s'}</span></div>
-        <div class="sub">Longest: ${streak.longest}</div>
+    <section class="home-main">
+      <div class="glass panel home-commits">
+        <div class="section-title"><h3>Commitments</h3><span class="muted">${streak.current > 0 ? `${streak.current}-day streak` : 'No streak yet'}</span></div>
+        <p class="muted" style="font-size:12px; margin:0 0 12px">Click a day to see reports</p>
+        ${commitmentGrid(sessions)}
+        <div style="margin-top:10px; font-size:11px; color:var(--muted); display:flex; gap:6px; align-items:center">
+          <span>Less</span>
+          <div class="commit-cell level-0" style="width:12px;height:12px;display:inline-block"></div>
+          <div class="commit-cell level-1" style="width:12px;height:12px;display:inline-block"></div>
+          <div class="commit-cell level-2" style="width:12px;height:12px;display:inline-block"></div>
+          <div class="commit-cell level-3" style="width:12px;height:12px;display:inline-block"></div>
+          <div class="commit-cell level-4" style="width:12px;height:12px;display:inline-block"></div>
+          <span>More</span>
+        </div>
       </div>
-      <div class="insight-card pink">
-        <div class="label">This week</div>
-        <div class="value">${week.count}</div>
-        <div class="sub">${formatDurationHuman(week.totalSeconds)} · ${week.totalNotes.toLocaleString()} notes</div>
+      <div class="glass panel home-last-session">
+        ${lastSessionWidget(sessions)}
       </div>
-      <div class="insight-card blue">
-        <div class="label">Longest session</div>
-        <div class="value">${formatDurationHuman(records.longestDurationSeconds)}</div>
-        <div class="sub">Personal record</div>
-      </div>
-      <div class="insight-card green">
-        <div class="label">Most notes</div>
-        <div class="value">${records.mostNotes.toLocaleString()}</div>
-        <div class="sub">In a single session</div>
-      </div>
-    </div>
-  `;
+    </section>
 
-  const historyBlock = sessions.length ? `
-    <section class="glass panel">
+    <section class="home-bottom">
+      <div class="glass panel home-friends">
+        <h3 style="font-size:15px; color:var(--deep-red); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px">Your friends</h3>
+        <div class="friends-empty">
+          <p class="muted" style="font-size:13px; margin:0">Share your link to add friends and compare scores.</p>
+        </div>
+      </div>
+      <div class="glass panel home-competitions">
+        <h3 style="font-size:15px; color:var(--deep-red); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px">Competitions</h3>
+        <span class="comp-in-progress-badge">In progress</span>
+        <p class="muted" style="font-size:12px; margin:8px 0 12px">Competitions require a server. Coming soon — you'll be able to compare scores with friends.</p>
+        ${LEVELS.map(level => `
+          <div class="comp-level blocked">
+            <div class="comp-level-name">${escapeHtml(level.name)}</div>
+            <span class="muted" style="font-size:12px">${escapeHtml(level.subtitle || '')}</span>
+          </div>
+        `).join('')}
+      </div>
+      <div class="glass panel home-badges">
+        <h3 style="font-size:15px; color:var(--deep-red); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px">Monthly badges</h3>
+        ${monthlyBadges(sessions, streak)}
+      </div>
+    </section>
+
+    ${sessions.length ? `
+    <section class="glass panel" style="margin-top:20px">
       <div class="section-title"><h3>Session history</h3><span class="muted">${sessions.length} total</span></div>
       <div class="history">
         ${sessions.slice(0, 20).map(s => historyRow(s)).join('')}
       </div>
-    </section>
-  ` : `
-    <section class="glass panel">
-      <div class="empty">
-        <h3>No sessions yet</h3>
-        <p>Start your first tracked practice below.</p>
-      </div>
-    </section>
+    </section>` : ''}
   `;
+}
 
-  return `
-    ${connBlock}
-    <section class="glass panel" style="display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap">
-      <div>
-        <h2 style="margin-bottom:4px">Ready to practice?</h2>
-        <p class="muted" style="margin:0">Hit Start and every note is captured. End when you're done — we'll do the math.</p>
-      </div>
-      <button class="btn big pink" data-action="start-session" ${connected ? '' : 'disabled'}>Start session</button>
-    </section>
+function monthlyBadges(sessions, streak) {
+  const badges = [];
+  if (sessions.length >= 1) badges.push({ icon: '🎹', name: 'First note', desc: 'Completed first session' });
+  if (streak.current >= 3) badges.push({ icon: '🔥', name: '3-day streak', desc: 'Practiced 3 days in a row' });
+  if (streak.current >= 7) badges.push({ icon: '⭐', name: 'Week warrior', desc: '7-day practice streak' });
+  if (sessions.length >= 10) badges.push({ icon: '💎', name: 'Dedicated', desc: '10 sessions completed' });
 
-    <div style="height:20px"></div>
-    ${insights}
-    <div style="height:24px"></div>
-    ${historyBlock}
-  `;
+  if (!badges.length) {
+    return `<p class="muted" style="font-size:13px; margin:0">Complete sessions to earn badges!</p>`;
+  }
+
+  return `<div class="badge-grid">${badges.map(b =>
+    `<div class="badge-item" title="${escapeHtml(b.desc)}">
+      <div class="badge-icon">${b.icon}</div>
+      <div class="badge-name">${escapeHtml(b.name)}</div>
+    </div>`
+  ).join('')}</div>`;
 }
 
 function historyRow(s){
   const started = new Date(s.startedAt);
   const dateStr = started.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' });
   const timeStr = started.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
+  const sourceIcon = s.source === 'audio' ? '🎵' : '🎹';
   return `
     <div class="history-item" data-action="open-session" data-id="${escapeHtml(s.id)}">
       <div>
-        <div class="when">${escapeHtml(dateStr)}</div>
+        <div class="when">${sourceIcon} ${escapeHtml(dateStr)}</div>
         <div class="when-sub">${escapeHtml(timeStr)}</div>
       </div>
       <div class="history-stat"><b>${formatDurationHuman(s.durationSeconds)}</b>duration</div>
       <div class="history-stat"><b>${s.totalNotes.toLocaleString()}</b>notes</div>
-      <div class="history-stat hide-sm"><b>${s.notesPerMinute}</b>notes/min</div>
+      <div class="history-stat hide-sm"><b>${s.notesPerMinute || s.npm || 0}</b>notes/min</div>
     </div>
+  `;
+}
+
+/* ---------- Upload view ---------- */
+
+export function viewUpload({ processing, error, passageId }) {
+  const passage = passageId ? LEVELS.flatMap(l => l.passages).find(p => p.id === passageId) : null;
+
+  return `
+    <section class="glass panel">
+      <h2>Upload audio</h2>
+      <p class="lede">Record a passage on your phone or computer, then upload the file here. We'll analyze your speed, accuracy, touch, and rhythm.</p>
+
+      <div class="field">
+        <label>What did you play? (optional — for competition scoring)</label>
+        <select id="passageSelect">
+          <option value="">Free practice (no competition)</option>
+          ${LEVELS.filter(l => !l.locked).flatMap(l => {
+            const items = [...l.passages];
+            if (l.legendary) items.push(l.legendary);
+            return items;
+          }).map(p =>
+            `<option value="${p.id}" ${p.id === passageId ? 'selected' : ''}>${escapeHtml(p.name)} — ${escapeHtml(p.detail)}</option>`
+          ).join('')}
+        </select>
+      </div>
+
+      ${passage ? `<div class="alert info" style="margin-top:0"><h4>Competition: ${escapeHtml(passage.name)}</h4><p>${escapeHtml(passage.description)}</p></div>` : ''}
+
+      <div class="upload-zone ${processing ? 'processing' : ''}" id="uploadZone">
+        ${processing
+          ? `<div class="upload-processing">
+               <div class="spinner"></div>
+               <p>Analyzing your recording...</p>
+             </div>`
+          : `<div class="upload-prompt">
+               <div style="font-size:32px; margin-bottom:12px">📁</div>
+               <p style="font-weight:700; margin:0 0 6px">Drop audio file here</p>
+               <p class="muted" style="font-size:12px; margin:0">or click to browse · m4a, mp3, wav</p>
+               <input type="file" id="audioFile" accept=".m4a,.mp3,.wav,.ogg,.aac,audio/*" style="display:none">
+             </div>`}
+      </div>
+
+      ${error ? `<div class="alert" style="margin-top:14px"><h4>Analysis error</h4><p>${escapeHtml(error)}</p></div>` : ''}
+
+      <div style="margin-top:16px">
+        <button class="btn-secondary" data-action="go-home">← Back to dashboard</button>
+      </div>
+    </section>
+  `;
+}
+
+/* ---------- Competition level view ---------- */
+
+export function viewLevel({ levelId, sessions }) {
+  const level = LEVELS.find(l => l.id === levelId);
+  if (!level) return `<section class="glass panel"><h2>Level not found</h2><button class="btn" data-action="go-home">Home</button></section>`;
+
+  const allPassages = [...level.passages];
+  if (level.legendary) allPassages.push(level.legendary);
+
+  return `
+    <section class="glass panel">
+      <h2>${escapeHtml(level.name)}: ${escapeHtml(level.subtitle || '')}</h2>
+      <p class="lede">Upload attempts to improve your score. ${level.legendary ? 'Complete the main passage to unlock Legendary.' : ''}</p>
+
+      <div class="passage-list">
+        ${level.passages.map(p => passageCard(p, sessions, false)).join('')}
+        ${level.legendary ? passageCard(level.legendary, sessions, true) : ''}
+      </div>
+
+      <div style="margin-top:20px">
+        <button class="btn-secondary" data-action="go-home">← Back to dashboard</button>
+      </div>
+    </section>
+
+    <section class="glass panel" style="margin-top:20px">
+      <div class="section-title"><h3>Scoring rules</h3></div>
+      <div class="rules-grid">
+        <div class="rule-card">
+          <h4>Speed (0–70 pts)</h4>
+          <p>Based on notes per minute. Slow = 10–25, Medium = 25–45, Fluent = 45–60, Fast = 60–70.</p>
+        </div>
+        <div class="rule-card">
+          <h4>Accuracy (×0.5–1.0)</h4>
+          <p>Multiplied by your speed points. Below 80% cuts your score in half. 99%+ = full credit.</p>
+        </div>
+        <div class="rule-card">
+          <h4>Evenness (+0–15 bonus)</h4>
+          <p>Bonus for steady rhythm. Not a blocker — an uneven but fast/accurate run still scores well.</p>
+        </div>
+      </div>
+      <div class="formula-box">
+        <code>Score = Speed × Accuracy + Evenness bonus</code>
+        <p class="muted" style="font-size:12px; margin-top:6px">A fast player at 75% accuracy scores <b>worse</b> than a medium player at 99% accuracy.</p>
+      </div>
+    </section>
+  `;
+}
+
+function passageCard(p, sessions, isLegendary) {
+  const best = bestScoreForPassage(p.id, sessions);
+  return `
+    <div class="passage-card ${isLegendary ? 'legendary' : ''}">
+      <div class="passage-info">
+        <div class="passage-name">${isLegendary ? '⭐ ' : ''}${escapeHtml(p.name)}</div>
+        <div class="passage-detail">${escapeHtml(p.detail)}</div>
+        <div class="passage-desc">${escapeHtml(p.description)}</div>
+      </div>
+      <div class="passage-score">
+        ${best != null
+          ? `<div class="score-value">${best}</div><div class="score-label">Best score</div>`
+          : `<div class="score-label">No attempts</div>`}
+      </div>
+      <button class="btn pink" data-action="compete-upload" data-id="${p.id}">Upload attempt</button>
+    </div>`;
+}
+
+function bestScoreForPassage(passageId, sessions) {
+  const attempts = sessions.filter(s => s.competitionPassageId === passageId && s.competitionScore != null);
+  if (!attempts.length) return null;
+  return Math.max(...attempts.map(s => s.competitionScore));
+}
+
+/* ---------- Audio report view ---------- */
+
+export function viewAudioReport({ session, passage, score, isFresh }) {
+  const dateStr = new Date(session.startedAt).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  const sl = speedLabel(session.npm || session.notesPerMinute || 0);
+  const rl = session.cv != null ? rhythmLabel(session.cv) : '—';
+  const tl = session.dbStd != null ? touchLabel(session.dbStd) : '—';
+  const inKeyPct = session.inKeyPct || 0;
+  const notes = coachNotes({
+    npm: session.npm || session.notesPerMinute || 0,
+    cv: session.cv || 0,
+    inKeyPct: inKeyPct,
+  });
+
+  return `
+    <section class="glass panel">
+      <div class="summary-header">
+        ${isFresh ? `<span class="pill">Session saved</span>` : ''}
+        <h2>${passage ? escapeHtml(passage.name) : 'Practice session'}</h2>
+        <p class="lede">${escapeHtml(dateStr)} · ${session.durationSeconds || session.duration || 0}s · ${session.totalNotes} notes · ${session.source === 'audio' ? escapeHtml(session.fileName || 'Audio upload') : 'MIDI'}</p>
+      </div>
+
+      ${score ? `
+        <div class="competition-score-banner">
+          <div class="comp-score-value">${score.total}</div>
+          <div class="comp-score-label">Competition score</div>
+          <div class="comp-score-breakdown">
+            Speed ${score.speedPoints} × Accuracy ${score.accuracyMultiplier} + Evenness ${score.evennessBonus}
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="insight-grid" style="margin-top:20px">
+        <div class="insight-card warm">
+          <div class="label">Speed</div>
+          <div class="value">${sl}</div>
+          <div class="sub">~${session.npm || session.notesPerMinute || 0}/min</div>
+        </div>
+        <div class="insight-card pink">
+          <div class="label">Rhythm</div>
+          <div class="value">${rl}</div>
+          <div class="sub">${session.cv != null ? `CV ${session.cv}` : '—'}</div>
+        </div>
+        <div class="insight-card blue">
+          <div class="label">Touch</div>
+          <div class="value">${tl}</div>
+          <div class="sub">${session.dbStd != null ? `±${session.dbStd} dB` : '—'}</div>
+        </div>
+        <div class="insight-card green">
+          <div class="label">Accuracy</div>
+          <div class="value">${inKeyPct}%</div>
+          <div class="sub">in key</div>
+        </div>
+      </div>
+
+      <div class="coach-notes" style="margin-top:20px">
+        <h4 style="font-size:13px; color:var(--deep-red); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:8px">Coach notes</h4>
+        <p style="color:var(--navy-soft); line-height:1.6">${escapeHtml(notes)}</p>
+      </div>
+
+      ${session.ascending && session.descending ? `
+        <div class="section-title" style="margin-top:20px"><h3>Ascending vs descending</h3></div>
+        <div class="asc-desc-grid">
+          <div class="asc-desc-card">
+            <h4>Going up ↗</h4>
+            <div class="ad-stat"><span class="ad-label">Notes</span><span class="ad-val">${session.ascending.noteCount}</span></div>
+            <div class="ad-stat"><span class="ad-label">Speed</span><span class="ad-val">${speedLabel(session.ascending.npm)} (~${session.ascending.npm}/min)</span></div>
+            <div class="ad-stat"><span class="ad-label">Rhythm</span><span class="ad-val">${rhythmLabel(session.ascending.cv)}</span></div>
+          </div>
+          <div class="asc-desc-card">
+            <h4>Going down ↘</h4>
+            <div class="ad-stat"><span class="ad-label">Notes</span><span class="ad-val">${session.descending.noteCount}</span></div>
+            <div class="ad-stat"><span class="ad-label">Speed</span><span class="ad-val">${speedLabel(session.descending.npm)} (~${session.descending.npm}/min)</span></div>
+            <div class="ad-stat"><span class="ad-label">Rhythm</span><span class="ad-val">${rhythmLabel(session.descending.cv)}</span></div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${session.keyHeatmap ? `
+        <div class="section-title" style="margin-top:24px"><h3>Key heatmap</h3></div>
+        ${renderHeatmap(session.keyHeatmap, session.minKey, session.maxKey)}
+      ` : ''}
+
+      <div style="display:flex; gap:12px; margin-top:26px; flex-wrap:wrap">
+        <button class="btn" data-action="go-home">Back to dashboard</button>
+        <button class="btn-secondary" data-action="delete-session" data-id="${escapeHtml(session.id)}">Delete session</button>
+      </div>
+    </section>
   `;
 }
 
@@ -281,9 +628,15 @@ export function updateLive(snapshot){
   set('liveVel', snapshot.avgVelocity);
 }
 
-/* ---------- Session summary / detail ---------- */
+/* ---------- Session summary (MIDI) ---------- */
 
 export function viewSessionSummary({ session, isFresh }){
+  if (session.source === 'audio') {
+    const passage = session.competitionPassageId ? LEVELS.flatMap(l => l.passages).find(p => p.id === session.competitionPassageId) : null;
+    const score = session.competitionScore != null ? { total: session.competitionScore, speedPoints: session.scoreBreakdown?.speedPoints || 0, accuracyMultiplier: session.scoreBreakdown?.accuracyMultiplier || 0, evennessBonus: session.scoreBreakdown?.evennessBonus || 0 } : null;
+    return viewAudioReport({ session, passage, score, isFresh });
+  }
+
   const started = new Date(session.startedAt);
   const dateStr = started.toLocaleDateString(undefined, { weekday:'long', month:'long', day:'numeric' });
   const timeStr = started.toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' });
@@ -363,7 +716,7 @@ function renderHeatmap(heatmap, minKey, maxKey){
 
 function renderRange(minKey, maxKey){
   if(minKey == null || maxKey == null) return `<div class="muted">No range data.</div>`;
-  const FLOOR = 21, CEIL = 108; // A0..C8
+  const FLOOR = 21, CEIL = 108;
   const span = CEIL - FLOOR;
   const left = ((minKey - FLOOR) / span) * 100;
   const width = ((maxKey - minKey) / span) * 100;
