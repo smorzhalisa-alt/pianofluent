@@ -554,10 +554,17 @@ export function viewLevel({ levelId, sessions, connected }) {
         </div>
 
         <div class="lvl-sheet-music">
-          <div class="lvl-sheet-placeholder">
-            <span class="lvl-sheet-icon">🎼</span>
-            <span class="lvl-sheet-text">${escapeHtml(passage.name)} — ${escapeHtml(passage.detail)}</span>
-          </div>
+          ${level.id === 'level-1' ? `
+            <img src="img/c-major-sheet.png" alt="C major scale sheet music" class="lvl-sheet-img">
+            <div class="lvl-ascending-hint">
+              <span class="lvl-arrow">↗</span> Ascending — start low, go up
+            </div>
+          ` : `
+            <div class="lvl-sheet-placeholder">
+              <span class="lvl-sheet-icon">🎼</span>
+              <span class="lvl-sheet-text">${escapeHtml(passage.name)} — ${escapeHtml(passage.detail)}</span>
+            </div>
+          `}
         </div>
 
         <div class="lvl-actions">
