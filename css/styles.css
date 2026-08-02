@@ -175,7 +175,14 @@ a{ color:inherit; }
 .device-item:hover{ transform:translateY(-1px); border-color:var(--pink); }
 .device-item .name{ font-weight:700; font-size:14px; }
 .device-item .meta{ font-size:12px; color:var(--muted); margin-top:2px; }
-.device-item.selected{ border-color:var(--deep-red); background:rgba(255,61,139,0.08); }
+.device-item.selected, .device-item.connected{ border-color:#1a8a4a; background:rgba(26,138,74,0.08); }
+.conn-dot{
+  display:inline-block; width:8px; height:8px; border-radius:50%;
+  background:var(--muted-soft); margin-right:6px; vertical-align:middle;
+}
+.conn-dot.green{ background:#1a8a4a; box-shadow:0 0 6px rgba(26,138,74,0.5); }
+.conn-dot.red{ background:#d32f2f; box-shadow:0 0 6px rgba(211,47,47,0.5); }
+.btn-ghost.connected{ color:#1a8a4a; font-weight:800; }
 .device-empty{
   padding:28px; border-radius:16px; border:1.5px dashed rgba(255,61,139,0.4); text-align:center;
   color:var(--muted); background:rgba(255,61,139,0.05);
@@ -193,6 +200,7 @@ a{ color:inherit; }
   background:var(--ex-green-bg); border:1px solid var(--ex-green-br); display:flex; align-items:center; gap:14px;
 }
 .note-detect.waiting{ background:var(--glass-fill-2); border-color:var(--glass-border); color:var(--muted); }
+.note-detect.success{ background:rgba(26,138,74,0.08); border-color:rgba(26,138,74,0.35); }
 .note-detect .big-note{ font-size:22px; font-weight:800; color:var(--navy); }
 
 /* Session active view */
@@ -295,6 +303,20 @@ a{ color:inherit; }
 /* ===== Home layout (wireframe) ===== */
 .home-top{ display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
 .home-top-left h2{ font-size:20px; color:var(--deep-red); }
+.home-top-left .level-indicator{ margin-top:6px; display:flex; align-items:center; gap:8px; }
+.level-badge{
+  font-size:12px; color:var(--muted); font-weight:700;
+}
+.level-count{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:22px; height:22px; border-radius:50%;
+  background:var(--grad-warm); color:#fff; font-size:11px; font-weight:800;
+}
+.level-btn{
+  background:rgba(255,255,255,0.7) !important; border:1.5px solid var(--pink) !important;
+  color:var(--deep-red) !important; font-weight:700 !important;
+}
+.level-btn:hover{ background:rgba(255,61,139,0.1) !important; }
 .home-top-right{ display:flex; gap:10px; flex-wrap:wrap; }
 
 .home-main{ display:grid; grid-template-columns:1.2fr 1fr; gap:18px; margin-top:18px; }

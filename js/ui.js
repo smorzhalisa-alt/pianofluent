@@ -189,14 +189,17 @@ export function viewConnect({ browser, inputs, currentDeviceName, savedDevices, 
   </div>`;
 
   const inputList = inputs.length
-    ? `<div class="device-list">${inputs.map(i => `
-        <div class="device-item ${i.id === currentDeviceIdShim() ? 'selected' : ''}" data-action="connect-device" data-id="${escapeHtml(i.id)}">
+    ? `<div class="device-list">${inputs.map(i => {
+        const isConnected = i.id === currentDeviceIdShim();
+        return `
+        <div class="device-item ${isConnected ? 'connected' : ''}" data-action="connect-device" data-id="${escapeHtml(i.id)}">
           <div>
-            <div class="name">${escapeHtml(i.name)}</div>
+            <div class="name"><span class="conn-dot ${isConnected ? 'green' : ''}"></span>${escapeHtml(i.name)}</div>
             <div class="meta">${escapeHtml(i.manufacturer || 'MIDI input')} · ${escapeHtml(i.connection)}</div>
           </div>
-          <button class="btn-ghost">${i.id === currentDeviceIdShim() ? 'Connected' : 'Connect'}</button>
-        </div>`).join('')}</div>`
+          <button class="btn-ghost ${isConnected ? 'connected' : ''}">${isConnected ? 'Connected' : 'Connect'}</button>
+        </div>`;
+      }).join('')}</div>`
     : `<div class="device-empty">No MIDI inputs detected yet. Turn on your piano, enable Bluetooth or plug in USB, then click <b>Scan for pianos</b>.</div>`;
 
   const helpSteps = guess
@@ -216,15 +219,15 @@ export function viewConnect({ browser, inputs, currentDeviceName, savedDevices, 
 
   const testBlock = currentDeviceName ? `
     <div class="section-title" style="margin-top:26px"><h3>Play a note to confirm</h3></div>
-    <div class="note-detect ${testNote ? '' : 'waiting'}">
+    <div class="note-detect ${testNote ? 'success' : 'waiting'}">
       <div style="flex:1">
         ${testNote
-          ? `<div class="big-note">✓ Note detected: ${escapeHtml(noteName(testNote.note))}</div>
+          ? `<div class="big-note" style="color:#1a8a4a">&#10003; Note detected: ${escapeHtml(noteName(testNote.note))}</div>
              <div class="muted" style="margin-top:2px">Velocity ${testNote.velocity} · You're all set.</div>`
           : `<div class="big-note muted">Waiting for a note…</div>
              <div class="muted" style="margin-top:2px">Press any key on <b>${escapeHtml(currentDeviceName)}</b> to test the connection.</div>`}
       </div>
-      ${testNote ? `<button class="btn pink" data-action="go-home">Start tracking</button>` : ''}
+      ${testNote ? `<button class="btn pink" data-action="go-home">Go to dashboard</button>` : ''}
     </div>` : '';
 
   return `
@@ -281,16 +284,35 @@ function modelOptions(activeKey){
 
 /* ---------- Home dashboard (wireframe layout) ---------- */
 
+function currentLevel(sessions) {
+  const real = sessions.filter(s => !s.testSkip);
+  const completed = new Set(real.filter(s => s.competitionPassageId && s.competitionScore >= 20).map(s => s.competitionPassageId));
+  for (let i = 0; i < LEVELS.length; i++) {
+    const allDone = LEVELS[i].passages.every(p => completed.has(p.id));
+    if (!allDone) return { index: i, level: LEVELS[i], completedCount: i };
+  }
+  return { index: LEVELS.length - 1, level: LEVELS[LEVELS.length - 1], completedCount: LEVELS.length };
+}
+
 export function viewHome({ sessions, currentDeviceName, connected }){
   const streak = computeStreak(sessions);
+  const { level, completedCount } = currentLevel(sessions);
+  const realSessions = sessions.filter(s => !s.testSkip);
 
   return `
     <section class="glass panel home-top">
       <div class="home-top-left">
         <h2 style="margin-bottom:0">Start practice</h2>
+        <div class="level-indicator">
+          <span class="level-badge">Your level: ${escapeHtml(level.name)}</span>
+          ${completedCount > 0 ? `<span class="level-count">${completedCount}</span>` : ''}
+        </div>
       </div>
       <div class="home-top-right">
-        <button class="btn" data-action="go-connect">Connect piano</button>
+        <button class="btn level-btn" data-action="open-level" data-id="${level.id}">Uncover ${escapeHtml(level.name)}</button>
+        ${connected
+          ? `<button class="btn pink" data-action="start-session">Record with piano</button>`
+          : `<button class="btn" data-action="go-connect">Connect piano</button>`}
         <button class="btn pink" data-action="open-upload">Commit with audio</button>
       </div>
     </section>
@@ -319,7 +341,8 @@ export function viewHome({ sessions, currentDeviceName, connected }){
       <div class="glass panel home-friends">
         <h3 style="font-size:15px; color:var(--deep-red); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:12px">Your friends</h3>
         <div class="friends-empty">
-          <p class="muted" style="font-size:13px; margin:0">Share your link to add friends and compare scores.</p>
+          <p class="muted" style="font-size:13px; margin:0">No friends in the app yet.</p>
+          <p class="muted" style="font-size:12px; margin:6px 0 0">Share your link to add friends and compare scores.</p>
         </div>
       </div>
       <div class="glass panel home-competitions">
@@ -339,11 +362,11 @@ export function viewHome({ sessions, currentDeviceName, connected }){
       </div>
     </section>
 
-    ${sessions.length ? `
+    ${realSessions.length ? `
     <section class="glass panel" style="margin-top:20px">
-      <div class="section-title"><h3>Session history</h3><span class="muted">${sessions.length} total</span></div>
+      <div class="section-title"><h3>Session history</h3><span class="muted">${realSessions.length} total</span></div>
       <div class="history">
-        ${sessions.slice(0, 20).map(s => historyRow(s)).join('')}
+        ${realSessions.slice(0, 20).map(s => historyRow(s)).join('')}
       </div>
     </section>` : ''}
   `;
