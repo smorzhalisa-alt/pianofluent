@@ -549,7 +549,7 @@ export function viewLevel({ levelId, sessions, connected }) {
             </ol>
           </div>
           <div class="lvl-mascot">
-            <img src="img/octopus-logo.png" alt="Octopus mascot" class="lvl-mascot-img">
+            <img src="img/octopus-happy.png" alt="Octopus mascot" class="lvl-mascot-img">
           </div>
         </div>
 
