@@ -309,11 +309,7 @@ export function viewHome({ sessions, currentDeviceName, connected }){
         </div>
       </div>
       <div class="home-top-right">
-        <button class="btn level-btn" data-action="open-level" data-id="${level.id}">Uncover ${escapeHtml(level.name)}</button>
-        ${connected
-          ? `<button class="btn pink" data-action="start-session">Record with piano</button>`
-          : `<button class="btn" data-action="go-connect">Connect piano</button>`}
-        <button class="btn pink" data-action="open-upload">Commit with audio</button>
+        <button class="btn pink big" data-action="open-level" data-id="${level.id}">Uncover ${escapeHtml(level.name)}</button>
       </div>
     </section>
 
