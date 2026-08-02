@@ -72,8 +72,13 @@ function renderCurrent(){
   const state = storage.getState();
   const { path, param } = currentRoute();
 
-  if(!state.onboarded && path !== 'welcome' && path !== 'connect' && path !== 'upload'){
+  const hasSessions = storage.getSessions().filter(s => !s.testSkip).length > 0;
+  if(!state.onboarded && !hasSessions && path !== 'welcome' && path !== 'connect' && path !== 'upload'){
     location.hash = '#/welcome';
+    return;
+  }
+  if((state.onboarded || hasSessions) && (path === '' || path === 'welcome')){
+    location.hash = '#/home';
     return;
   }
 
