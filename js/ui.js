@@ -148,6 +148,7 @@ export function viewWelcome({ browser }){
   return `
     ${warn}
     <section class="glass hero">
+      <img src="img/octopus-logo.png" alt="PianoFluent mascot" class="hero-mascot">
       <span class="pill">Piano practice tracker</span>
       <h2 style="margin-top:16px">Every practice session, measured.</h2>
       <p class="lede">Connect your piano over MIDI or upload a recording — PianoFluent turns your playing into stats, streaks, and competition scores. Like Strava, but for the keys.</p>
@@ -548,7 +549,7 @@ export function viewLevel({ levelId, sessions, connected }) {
             </ol>
           </div>
           <div class="lvl-mascot">
-            <img src="img/octopus-happy.png" alt="Octopus mascot" class="lvl-mascot-img">
+            <img src="img/octopus-logo.png" alt="Octopus mascot" class="lvl-mascot-img">
           </div>
         </div>
 
