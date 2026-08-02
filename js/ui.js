@@ -456,68 +456,131 @@ export function viewUpload({ processing, error, passageId }) {
 
 /* ---------- Competition level view ---------- */
 
-export function viewLevel({ levelId, sessions }) {
+function levelRules(level) {
+  const p = level.passages[0];
+  if (!p) return '';
+  const rules = [];
+  if (level.id === 'level-1') {
+    rules.push('Play C major scale from middle C4 to 3 line C6');
+    rules.push('White keys only — no sharps or flats');
+    rules.push('Ascending only (going up)');
+  } else if (level.id === 'level-2') {
+    rules.push('Play F major scale across 4 octaves');
+    rules.push('One flat: B♭ — watch the thumb crossing');
+    rules.push('Ascending and descending (up and back down)');
+  } else if (level.id === 'level-3') {
+    rules.push('Play F major arpeggio (F-A-C) across 4 octaves');
+    rules.push('Wider intervals — focus on hand position');
+    rules.push('Ascending and descending');
+  } else {
+    rules.push(`Play ${escapeHtml(p.name)}`);
+    rules.push(escapeHtml(p.detail));
+  }
+  return rules;
+}
+
+export function viewLevel({ levelId, sessions, connected }) {
   const level = LEVELS.find(l => l.id === levelId);
   if (!level) return `<section class="glass panel"><h2>Level not found</h2><button class="btn" data-action="go-home">Home</button></section>`;
 
-  const allPassages = [...level.passages];
-  if (level.legendary) allPassages.push(level.legendary);
+  const passage = level.passages[0];
+  const best = bestScoreForPassage(passage.id, sessions);
+  const mainCompleted = best != null && best >= 20;
+  const rules = levelRules(level);
+  const attempts = sessions.filter(s => s.competitionPassageId === passage.id && s.competitionScore != null);
+  const lastAttempt = attempts.length ? attempts[0] : null;
+
+  const levelIdx = LEVELS.findIndex(l => l.id === levelId);
+  const nextLevel = levelIdx < LEVELS.length - 1 ? LEVELS[levelIdx + 1] : null;
+
+  let feedbackHtml = '';
+  if (lastAttempt) {
+    const passed = lastAttempt.competitionScore >= 20;
+    const acc = lastAttempt.inKeyPct || 0;
+    feedbackHtml = `
+      <div class="lvl-report ${passed ? 'pass' : 'fail'}">
+        <div class="lvl-report-top">
+          <span class="lvl-report-score">${lastAttempt.competitionScore}</span>
+          <span class="lvl-report-verdict">${passed ? 'Passage matched!' : 'Ooops, I can\'t hear the task'}</span>
+        </div>
+        <div class="lvl-report-details">
+          <span>${speedLabel(lastAttempt.npm || lastAttempt.notesPerMinute || 0)}</span>
+          <span>${acc}% in key</span>
+          <span>${relativeTime(lastAttempt.startedAt || lastAttempt.endedAt)}</span>
+        </div>
+        ${!passed ? `<p class="lvl-report-hint">Please try again — play the full passage steadily</p>` : ''}
+        ${attempts.length > 1 ? `<div class="lvl-report-history">${attempts.length} total attempts · best: ${best}</div>` : ''}
+      </div>`;
+  } else {
+    feedbackHtml = `
+      <div class="lvl-report waiting">
+        <span class="lvl-report-icon">🎧</span>
+        <span class="lvl-report-verdict">Recording status will appear here</span>
+      </div>`;
+  }
+
+  let proceedHtml = '';
+  if (mainCompleted && level.legendary) {
+    proceedHtml = `
+      <button class="btn big lvl-legendary-btn" data-action="open-legendary" data-id="${level.legendary.id}" data-level="${levelId}">
+        Legendary: ${escapeHtml(level.legendary.detail)}
+      </button>`;
+  } else if (mainCompleted && nextLevel) {
+    proceedHtml = `
+      <button class="btn big pink" data-action="open-level" data-id="${nextLevel.id}">
+        Next: ${escapeHtml(nextLevel.name)} — ${escapeHtml(nextLevel.subtitle)}
+      </button>`;
+  }
 
   return `
-    <section class="glass panel">
-      <h2>${escapeHtml(level.name)}: ${escapeHtml(level.subtitle || '')}</h2>
-      <p class="lede">Upload attempts to improve your score. ${level.legendary ? 'Complete the main passage to unlock Legendary.' : ''}</p>
-
-      <div class="passage-list">
-        ${level.passages.map(p => passageCard(p, sessions, false)).join('')}
-        ${level.legendary ? passageCard(level.legendary, sessions, true) : ''}
+    <section class="lvl-screen">
+      <div class="lvl-header">
+        <h2>${escapeHtml(level.name)}</h2>
+        <span class="lvl-subtitle">${escapeHtml(level.subtitle || '')}</span>
       </div>
 
-      <div style="margin-top:20px">
-        <button class="btn-secondary" data-action="go-home">← Back to dashboard</button>
-      </div>
-    </section>
+      <div class="lvl-body glass panel">
+        <div class="lvl-top-row">
+          <div class="lvl-rules">
+            <h3 class="lvl-rules-title">Rules</h3>
+            <ol class="lvl-rules-list">
+              ${rules.map(r => `<li>${r}</li>`).join('')}
+            </ol>
+          </div>
+          <div class="lvl-mascot">
+            <img src="img/octopus-happy.png" alt="Octopus mascot" class="lvl-mascot-img">
+          </div>
+        </div>
 
-    <section class="glass panel" style="margin-top:20px">
-      <div class="section-title"><h3>Scoring rules</h3></div>
-      <div class="rules-grid">
-        <div class="rule-card">
-          <h4>Speed (0–70 pts)</h4>
-          <p>Based on notes per minute. Slow = 10–25, Medium = 25–45, Fluent = 45–60, Fast = 60–70.</p>
+        <div class="lvl-sheet-music">
+          <div class="lvl-sheet-placeholder">
+            <span class="lvl-sheet-icon">🎼</span>
+            <span class="lvl-sheet-text">${escapeHtml(passage.name)} — ${escapeHtml(passage.detail)}</span>
+          </div>
         </div>
-        <div class="rule-card">
-          <h4>Accuracy (×0.5–1.0)</h4>
-          <p>Multiplied by your speed points. Below 80% cuts your score in half. 99%+ = full credit.</p>
+
+        <div class="lvl-actions">
+          <button class="btn big lvl-action-midi ${connected ? '' : 'disabled-look'}" data-action="start-level-midi" data-id="${passage.id}">
+            <span class="lvl-action-icon">🎹</span>
+            Start with connected piano
+          </button>
+          <button class="btn big lvl-action-upload" data-action="compete-upload" data-id="${passage.id}">
+            <span class="lvl-action-icon">📁</span>
+            Record or upload file
+          </button>
         </div>
-        <div class="rule-card">
-          <h4>Evenness (+0–15 bonus)</h4>
-          <p>Bonus for steady rhythm. Not a blocker — an uneven but fast/accurate run still scores well.</p>
+        ${!connected ? `<p class="lvl-midi-hint muted">No piano connected — <a href="#/connect" style="color:var(--deep-red); font-weight:700">connect one</a> to use MIDI mode</p>` : ''}
+
+        ${feedbackHtml}
+
+        ${proceedHtml ? `<div class="lvl-proceed">${proceedHtml}</div>` : ''}
+
+        <div class="lvl-nav">
+          <button class="btn-secondary" data-action="go-home">Home</button>
         </div>
-      </div>
-      <div class="formula-box">
-        <code>Score = Speed × Accuracy + Evenness bonus</code>
-        <p class="muted" style="font-size:12px; margin-top:6px">A fast player at 75% accuracy scores <b>worse</b> than a medium player at 99% accuracy.</p>
       </div>
     </section>
   `;
-}
-
-function passageCard(p, sessions, isLegendary) {
-  const best = bestScoreForPassage(p.id, sessions);
-  return `
-    <div class="passage-card ${isLegendary ? 'legendary' : ''}">
-      <div class="passage-info">
-        <div class="passage-name">${isLegendary ? '⭐ ' : ''}${escapeHtml(p.name)}</div>
-        <div class="passage-detail">${escapeHtml(p.detail)}</div>
-        <div class="passage-desc">${escapeHtml(p.description)}</div>
-      </div>
-      <div class="passage-score">
-        ${best != null
-          ? `<div class="score-value">${best}</div><div class="score-label">Best score</div>`
-          : `<div class="score-label">No attempts</div>`}
-      </div>
-      <button class="btn pink" data-action="compete-upload" data-id="${p.id}">Upload attempt</button>
-    </div>`;
 }
 
 function bestScoreForPassage(passageId, sessions) {

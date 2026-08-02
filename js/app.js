@@ -19,6 +19,7 @@ const app = {
   midiInputs: [],
   testNote: null,
   freshSummaryId: null,
+  activePassageId: null,
   uploadState: { processing: false, error: null, passageId: null },
 };
 
@@ -247,9 +248,11 @@ async function handleAudioFile(file){
 /* ---------- level view ---------- */
 
 function renderLevel(levelId){
+  const current = midi.currentInput();
   renderView(ui.viewLevel({
     levelId,
     sessions: storage.getSessions(),
+    connected: !!current,
   }));
 }
 
@@ -329,9 +332,25 @@ function endSession({ discard = false } = {}){
   cleanupRecorderListeners();
 
   if(!summary || summary.totalNotes === 0 || discard){
+    app.activePassageId = null;
     renderView(ui.viewEmptySessionDiscard());
     return;
   }
+
+  if(app.activePassageId){
+    const passage = getPassage(app.activePassageId);
+    if(passage && summary.keyHeatmap){
+      const notes = Object.entries(summary.keyHeatmap).map(([note, count]) => ({ note: Number(note), count }));
+      const inKeyPct = computeInKeyPct(notes.flatMap(n => Array(n.count).fill({ note: n.note })), passage.keyPitchClasses);
+      summary.inKeyPct = inKeyPct;
+      summary.competitionPassageId = app.activePassageId;
+      const scoreResult = computeScore({ npm: summary.notesPerMinute || 0, inKeyPct, cv: summary.cv || 0.5 });
+      summary.competitionScore = scoreResult.total;
+      summary.scoreBreakdown = scoreResult;
+    }
+    app.activePassageId = null;
+  }
+
   storage.saveSession(summary);
   storage.setState({ onboarded: true });
   app.freshSummaryId = summary.id;
@@ -393,12 +412,25 @@ function wireGlobalClicks(){
         app.uploadState = { processing: false, error: null, passageId: null };
         goto('#/upload');
         break;
+      case 'open-legendary':
+        app.uploadState = { processing: false, error: null, passageId: id };
+        goto(`#/upload/${id}`);
+        break;
       case 'compete-upload':
         app.uploadState = { processing: false, error: null, passageId: id };
         goto(`#/upload/${id}`);
         break;
       case 'open-level':
         goto(`#/level/${id}`);
+        break;
+      case 'start-level-midi':
+        if(!midi.currentInput()){
+          flashAlert('Connect a piano first.');
+          goto('#/connect');
+          break;
+        }
+        app.activePassageId = id || null;
+        startSession();
         break;
       case 'start-session':
         startSession();
